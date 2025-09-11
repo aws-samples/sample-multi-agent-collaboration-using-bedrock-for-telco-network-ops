@@ -88,8 +88,8 @@ aws configure --profile your-profile-name
 1. **Clone the Repository**
 
 ```bash
-git clone https://github.com/yourusername/network-ops-gen-ai.git
-cd network-ops-gen-ai
+git clone https://github.com/aws-samples/sample-multi-agent-collaboration-using-bedrock-for-telco-network-ops.git
+cd sample-multi-agent-collaboration-using-bedrock-for-telco-network-ops
 ```
 
 2. **Deploy the Solution**
