@@ -1,0 +1,945 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Network Operations Agent Streamlit Application with Bedrock Agents (Fargate + CloudFront)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.9
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        BUCKET_NAME: !Ref NetworkDataBucket
+
+Parameters:
+  ECRRepositoryName:
+    Type: String
+    Default: network-operations-agent-streamlit
+    Description: Name of the ECR repository to store the Streamlit application container
+  
+  ContainerImageUri:
+    Type: String
+    Description: URI of the container image to deploy (including tag)
+    Default: ''
+
+  ArtifactBucket:
+    Type: String
+    Description: S3 bucket for storing build artifacts
+    Default: ''
+
+  CognitoUserPoolName:
+    Type: String
+    Description: 'Name for the Cognito User Pool'
+    Default: 'userpool'
+  
+  CognitoAppClientName:
+    Type: String
+    Description: 'Name for the Cognito App Client'
+    Default: 'appclient'
+    
+Resources:
+  # IAM Roles
+  NetworkOpsLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: NetworkOpsLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${NetworkDataBucket}
+                  - !Sub arn:aws:s3:::${NetworkDataBucket}/*
+
+  NetworkOpsAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-agent-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: NetworkOpsAgentPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+              - Effect: Allow
+                Action:
+                  - bedrock:GetAgent
+                  - bedrock:GetAgentAlias
+                  - bedrock:InvokeAgent
+                  - bedrock:ListAgents
+                  - bedrock:ListAgentAliases
+                  - bedrock:ListAgentCollaborators
+                  - bedrock:ListAgentActionGroups
+                  - bedrock:ListAgentVersions
+                  - bedrock:ListAsyncInvokes
+                  - bedrock:ListFoundationModels
+                  - bedrock:ListInvocations
+                  - bedrock:ListInferenceProfiles
+                  - bedrock:ListImportedModels
+                  - bedrock:GetAgentActionGroup
+                  - bedrock:GetAgentCollaborator
+                  - bedrock:GetInferenceProfile
+                  - bedrock:InvokeModel
+                Resource: "*"
+
+  # S3 Bucket for Network Data
+  NetworkDataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-data-${AWS::AccountId}-${AWS::Region}"
+      # Add lifecycle configuration to automatically delete objects
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteAllObjectsOnStackDeletion
+            Status: Enabled
+            ExpirationInDays: 365
+
+  # Lambda Layer for dependencies
+  NetworkOpsDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "${AWS::StackName}-dependencies"
+      Description: Layer for pandas and numpy
+      ContentUri: ./lambda_layer/
+      CompatibleRuntimes:
+        - python3.9
+      RetentionPolicy: Retain
+
+  # Lambda Functions for Bedrock Agents
+  MaintenanceCheckerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-maintenance-checker"
+      CodeUri: ./lambda_functions/maintenance_checker/
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt NetworkOpsLambdaRole.Arn
+      Layers:
+        - !Ref NetworkOpsDependenciesLayer
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref NetworkDataBucket
+
+  AlarmCheckerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-alarm-checker"
+      CodeUri: ./lambda_functions/alarm_checker/
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt NetworkOpsLambdaRole.Arn
+      Layers:
+        - !Ref NetworkOpsDependenciesLayer
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref NetworkDataBucket
+
+  KpiAnalyzerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-kpi-analyzer"
+      CodeUri: ./lambda_functions/kpi_analyzer/
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt NetworkOpsLambdaRole.Arn
+      Layers:
+        - !Ref NetworkOpsDependenciesLayer
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref NetworkDataBucket
+
+  # Initial Data Load Lambda
+  InitialDataLoadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-initial-data-load"
+      CodeUri: ./lambda_functions/initial_data_load/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.9
+      Timeout: 300
+      Role: !GetAtt NetworkOpsLambdaRole.Arn
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref NetworkDataBucket
+
+  # Custom Resource for Initial Data Load
+  InitialDataLoadResource:
+    Type: Custom::InitialDataLoad
+    DependsOn: BedrockAgentsResource
+    Properties:
+      ServiceToken: !GetAtt InitialDataLoadFunction.Arn
+      Region: !Ref AWS::Region
+      BucketName: !Ref NetworkDataBucket
+
+  # Custom Resource to create Bedrock Agents
+  BedrockAgentsCreator:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-bedrock-agents-creator"
+      CodeUri: ./lambda_functions/bedrock_agents_creator/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.9
+      Timeout: 900  # Increased to 15 minutes
+      MemorySize: 512
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:CreateAgent
+                - bedrock:UpdateAgent
+                - bedrock:GetAgent
+                - bedrock:DeleteAgent
+                - bedrock:CreateAgentAlias
+                - bedrock:UpdateAgentAlias
+                - bedrock:GetAgentAlias
+                - bedrock:DeleteAgentAlias
+                - bedrock:ListAgents
+                - bedrock:ListAgentAliases
+                - bedrock:AssociateAgentCollaborator
+                - bedrock:DisassociateAgentCollaborator
+                - bedrock:CreateAgentActionGroup
+                - bedrock:UpdateAgentActionGroup
+                - bedrock:GetAgentActionGroup
+                - bedrock:DeleteAgentActionGroup
+                - bedrock:ListAgentActionGroups
+                - bedrock:PrepareAgent
+                - lambda:InvokeFunction
+                - lambda:GetFunction
+                - lambda:AddPermission
+                - iam:GetRole
+                - iam:CreateRole
+                - iam:PutRolePolicy
+                - iam:AttachRolePolicy
+                - iam:UpdateAssumeRolePolicy
+                - bedrock:GetAgentAlias  # Added for agent collaboration
+                - bedrock:InvokeAgent    # Added for agent collaboration
+              Resource: 
+                - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*"
+                - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent-alias/*"
+                - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
+                - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+      Environment:
+        Variables:
+          MAINTENANCE_CHECKER_ARN: !GetAtt MaintenanceCheckerFunction.Arn
+          ALARM_CHECKER_ARN: !GetAtt AlarmCheckerFunction.Arn
+          KPI_ANALYZER_ARN: !GetAtt KpiAnalyzerFunction.Arn
+          AGENT_ROLE_ARN: !GetAtt NetworkOpsAgentRole.Arn
+          RESOURCE_SUFFIX: !Sub "${AWS::StackName}-${AWS::Region}"
+
+  BedrockAgentsResource:
+    Type: Custom::BedrockAgentsResource
+    Properties:
+      ServiceToken: !GetAtt BedrockAgentsCreator.Arn
+      Region: !Ref AWS::Region
+      AccountId: !Ref AWS::AccountId
+
+  # ECR Repository is created by the deploy script, not by CloudFormation
+
+  # VPC for Fargate
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnets
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet-1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet-2"
+
+  # Route Table for Public Subnets
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-route-table"
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # Security Group for ALB
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ALB - Header validation used for access control
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP access - protected by header validation"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "HTTPS access - protected by header validation"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  # Security Group for Fargate Tasks
+  FargateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Fargate tasks - ALB access only
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        # Only allow HTTPS outbound for AWS API calls and external dependencies
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "HTTPS for AWS APIs and external services"
+        # Allow DNS resolution
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: "DNS resolution"
+        # Remove HTTP outbound to minimize attack surface
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-fargate-sg"
+
+  # Separate security group rules to avoid circular dependency
+  ALBToFargateEgressRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref ALBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8501
+      ToPort: 8501
+      DestinationSecurityGroupId: !Ref FargateSecurityGroup
+
+  FargateFromALBIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FargateSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8501
+      ToPort: 8501
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${AWS::StackName}-cluster"
+
+  # ECS Task Execution Role
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ecs-execution-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ECS Task Role
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ecs-task-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:GetAgent'
+                  - 'bedrock:GetAgentAlias'
+                  - 'bedrock:InvokeAgent'
+                  - 'bedrock:ListAgents'
+                  - 'bedrock:ListAgentAliases'
+                Resource: 
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*"
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent-alias/*"
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${NetworkDataBucket}'
+                  - !Sub 'arn:aws:s3:::${NetworkDataBucket}/*'
+
+  # ECS Task Definition
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${AWS::StackName}-task"
+      Cpu: '1024'
+      Memory: '2048'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: streamlit
+          Image: !If [HasContainerImage, !Ref ContainerImageUri, !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AWS::StackName}-${ECRRepositoryName}:latest"]
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8501
+              HostPort: 8501
+              Protocol: tcp
+          Environment:
+            - Name: BOT_NAME
+              Value: "Network Operations Assistant"
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: STACK_NAME
+              Value: !Ref AWS::StackName
+            - Name: AWS_ACCOUNT_ID
+              Value: !Ref AWS::AccountId
+            # Streamlit specific settings for WebSocket support
+            - Name: STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION
+              Value: "false"
+            - Name: STREAMLIT_SERVER_PORT
+              Value: "8501"
+            - Name: STREAMLIT_SERVER_ADDRESS
+              Value: "0.0.0.0"
+            - Name: STREAMLIT_SERVER_HEADLESS
+              Value: "true"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: streamlit
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -f http://localhost:8501/_stcore/health || exit 1"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 120
+
+  # CloudWatch Log Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${AWS::StackName}"
+      RetentionInDays: 30
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-alb"
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '300'  # Increased timeout for WebSocket connections
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+
+  # ALB Target Group
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-tg"
+      Port: 8501
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckPath: "/_stcore/health"  # Streamlit health check endpoint
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+
+
+  # HTTP Listener (returns auth required for direct access)
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: 200
+            ContentType: text/html
+            MessageBody: !Sub |
+              <!DOCTYPE html>
+              <html>
+              <head>
+                <title>Redirecting to Secure Access</title>
+                <meta http-equiv="refresh" content="0; url=https://${CloudFrontDistribution.DomainName}">
+              </head>
+              <body>
+                <h2>Access via Secure Gateway Required</h2>
+                <p>Redirecting to secure access...</p>
+                <p>If not redirected, <a href="https://${CloudFrontDistribution.DomainName}">click here to access securely</a></p>
+              </body>
+              </html>
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  # Listener rule to forward CloudFront traffic to target group
+  ALBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-CloudFront-Secret
+            Values:
+              - !Sub "${AWS::StackName}-${AWS::AccountId}-secret"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # ECS Service
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: !Sub "${AWS::StackName}-service"
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ECSTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 120  # Added grace period for health checks
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref FargateSecurityGroup
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+      LoadBalancers:
+        - ContainerName: streamlit
+          ContainerPort: 8501
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # Cognito User Pool
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}${CognitoUserPoolName}'
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+
+  # Cognito User Pool Domain
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "${AWS::StackName}-${AWS::AccountId}"
+      UserPoolId: !Ref CognitoUserPool
+
+  # Cognito App Client
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ClientName: !Sub '${AWS::StackName}${CognitoAppClientName}'
+      GenerateSecret: true
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      CallbackURLs:
+        - "https://DOMAIN_PLACEHOLDER/oauth2/idpresponse"
+      LogoutURLs:
+        - "https://DOMAIN_PLACEHOLDER"
+      SupportedIdentityProviders:
+        - COGNITO
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenValidity: 30
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  # CloudFront Origin Request Policy
+  WebSocketOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub "${AWS::StackName}-websocket-policy"
+        HeadersConfig:
+          HeaderBehavior: allViewer
+        CookiesConfig:
+          CookieBehavior: all
+        QueryStringsConfig:
+          QueryStringBehavior: all
+
+  # CloudFront Cache Policy with minimal caching
+  WebSocketCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub "${AWS::StackName}-websocket-cache-policy"
+        DefaultTTL: 1
+        MinTTL: 1
+        MaxTTL: 1
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: all
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - Host
+              - Origin
+              - Referer
+          QueryStringsConfig:
+            QueryStringBehavior: all
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+
+  # Response Headers Policy for Security
+  SecurityResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-security-headers"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+        CustomHeadersConfig:
+          Items:
+            - Header: "Server"
+              Value: "Enterprise-Network-Operations-Platform"
+              Override: true
+            - Header: "X-Powered-By"
+              Value: "Network-Operations-Dashboard"
+              Override: true
+            - Header: "X-Application-Type"
+              Value: "Enterprise-Network-Management"
+              Override: true
+
+  # IAM Role for CloudFront Auth Lambda Function
+  CloudFrontAuthFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CloudFrontAuthPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:InitiateAuth
+                  - cognito-idp:RespondToAuthChallenge
+                Resource: !GetAtt CognitoUserPool.Arn
+              - Effect: Allow
+                Action:
+                  - lambda:EnableReplication*
+                Resource: !Sub "arn:aws:lambda:*:${AWS::AccountId}:function:${AWS::StackName}-*"
+
+  # Custom resource to create and configure the Lambda@Edge function
+  AuthEdgeCreatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-auth-edge-creator"
+      CodeUri: ./lambda_functions/auth_edge_creator/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.9
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          LAMBDA_ROLE_ARN: !GetAtt CloudFrontAuthFunctionRole.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CreateFunction
+                - lambda:UpdateFunctionCode
+                - lambda:GetFunction
+                - lambda:GetFunctionConfiguration
+                - lambda:PublishVersion
+                - lambda:AddPermission
+                - lambda:UpdateFunctionConfiguration
+                - lambda:EnableReplication*
+                - cognito-idp:DescribeUserPoolClient
+                - cognito-idp:UpdateUserPoolClient
+                - cloudfront:GetDistributionConfig
+                - cloudfront:UpdateDistribution
+                - cloudfront:CreateInvalidation
+              Resource: 
+                - !Sub "arn:aws:lambda:*:${AWS::AccountId}:function:${AWS::StackName}-*"
+                - !Sub "arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*"
+                - !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource: !GetAtt CloudFrontAuthFunctionRole.Arn
+
+  # Custom resource to create and configure the Lambda@Edge function
+  AuthEdgeResource:
+    Type: Custom::AuthEdgeResource
+    DependsOn: 
+      - CloudFrontDistribution
+      - CognitoUserPoolClient
+    Properties:
+      ServiceToken: !GetAtt AuthEdgeCreatorFunction.Arn
+      StackName: !Ref AWS::StackName
+      Region: !Ref AWS::Region
+      AccountId: !Ref AWS::AccountId
+      UserPoolId: !Ref CognitoUserPool
+      ClientId: !Ref CognitoUserPoolClient
+      CloudFrontDistributionId: !Ref CloudFrontDistribution
+      CloudFrontDomain: !GetAtt CloudFrontDistribution.DomainName
+      Description: "Version for Lambda@Edge"
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !GetAtt ApplicationLoadBalancer.DNSName
+            Id: ALBOrigin
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 30
+            OriginCustomHeaders:
+              - HeaderName: X-CloudFront-Secret
+                HeaderValue: !Sub "${AWS::StackName}-${AWS::AccountId}-secret"
+        Enabled: true
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          TargetOriginId: ALBOrigin
+          CachePolicyId: !Ref WebSocketCachePolicy
+          OriginRequestPolicyId: !Ref WebSocketOriginRequestPolicy
+          ResponseHeadersPolicyId: !Ref SecurityResponseHeadersPolicy
+          ViewerProtocolPolicy: redirect-to-https
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        HttpVersion: http2
+
+Conditions:
+  HasContainerImage: !Not [!Equals [!Ref ContainerImageUri, '']]
+
+Outputs:
+  CloudFrontURL:
+    Description: URL of the CloudFront distribution
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+  
+  ALBEndpoint:
+    Description: Endpoint of the Application Load Balancer
+    Value: !Sub "http://${ApplicationLoadBalancer.DNSName}"
+  
+  ECRRepositoryURI:
+    Description: URI of the ECR repository
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AWS::StackName}-${ECRRepositoryName}"
+  
+  MaintenanceCheckerFunctionArn:
+    Description: ARN of the Maintenance Checker Lambda function
+    Value: !GetAtt MaintenanceCheckerFunction.Arn
+  
+  AlarmCheckerFunctionArn:
+    Description: ARN of the Alarm Checker Lambda function
+    Value: !GetAtt AlarmCheckerFunction.Arn
+  
+  KpiAnalyzerFunctionArn:
+    Description: ARN of the KPI Analyzer Lambda function
+    Value: !GetAtt KpiAnalyzerFunction.Arn
+    
+  CognitoHostedUI:
+    Description: URL of the Cognito Hosted UI
+    Value: 
+      Fn::Sub:
+        - "https://${Domain}.auth.${Region}.amazoncognito.com/login?client_id=${ClientId}&response_type=code&redirect_uri=https://${DomainName}/oauth2/idpresponse"
+        - Domain: !Ref CognitoUserPoolDomain
+          Region: !Ref AWS::Region
+          ClientId: !Ref CognitoUserPoolClient
+          DomainName: !GetAtt CloudFrontDistribution.DomainName
+    
+  CognitoUserPoolId:
+    Description: ID of the Cognito User Pool
+    Value: !Ref CognitoUserPool
+    
+  CognitoUserPoolName:
+    Description: Name of the Cognito User Pool
+    Value: !Sub '${AWS::StackName}${CognitoUserPoolName}'
+    
+  SupervisorAgentId:
+    Description: ID of the Supervisor Agent
+    Value: !GetAtt BedrockAgentsResource.SupervisorAgentId
+    
+  SupervisorAliasId:
+    Description: ID of the Supervisor Agent Alias
+    Value: !GetAtt BedrockAgentsResource.SupervisorAliasId
+    
+  CloudFrontDistributionId:
+    Description: ID of the CloudFront distribution
+    Value: !Ref CloudFrontDistribution

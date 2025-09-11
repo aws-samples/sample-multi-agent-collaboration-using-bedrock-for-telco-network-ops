@@ -1,0 +1,20 @@
+streamlit
+pandas
+Pillow
+boto3
+st-annotated-text
+termcolor==2.5.0
+black==24.10.0
+opensearch-py==2.7.1
+pydantic==2.10.2
+rich==13.9.4
+matplotlib==3.9.2
+ipython==8.29.0
+boto3
+botocore
+pyyaml
+retrying
+requests
+#source myenv/bin/activate
+#BOT_NAME="C-Spire Network Operations Assistant" streamlit run chat_assistant.py
+#BOT_NAME="Network Operations Assistant" streamlit run chat_assistant.py

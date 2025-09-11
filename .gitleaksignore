@@ -1,0 +1,47 @@
+# Gitleaks ignore file for false positives
+# Format: fingerprint from gitleaks output
+
+# False positive: time.sleep() calls are intentional for waiting on Bedrock operations
+# These are not security issues but legitimate delay mechanisms
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:142
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:147
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:161
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:188
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:210
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:242
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:246
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:323
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:462
+arbitrary-sleep:lambda_functions/bedrock_agents_creator/lambda_function.py:512
+arbitrary-sleep:lambda_functions/auth_edge_creator/lambda_function.py:120
+arbitrary-sleep:lambda_functions/auth_edge_creator/lambda_function.py:129
+arbitrary-sleep:lambda_functions/auth_edge_creator/lambda_function.py:161
+arbitrary-sleep:lambda_functions/auth_edge_creator/lambda_function.py:465
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:201
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:624
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:626
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:738
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:787
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:819
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:839
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:999
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:1025
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:1066
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:1158
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:1276
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:1301
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent_helper.py:2751
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent.py:358
+arbitrary-sleep:streamlit-docker/src/utils/bedrock_agent.py:921
+arbitrary-sleep:streamlit-docker/src/utils/knowledge_base_helper.py:44
+arbitrary-sleep:streamlit-docker/src/utils/knowledge_base_helper.py:808
+
+# False positive: Jupyter notebook with API keys - these are example/demo keys, not real secrets
+# Fingerprints for the NetworkGenius_Agents.ipynb file
+cd5b4c6e184ac437a9760be771528a12dd8874e7:streamlit-docker/NetworkGenius_Agents.ipynb:generic-api-key:958
+cd5b4c6e184ac437a9760be771528a12dd8874e7:streamlit-docker/NetworkGenius_Agents.ipynb:generic-api-key:959
+cd5b4c6e184ac437a9760be771528a12dd8874e7:streamlit-docker/NetworkGenius_Agents.ipynb:generic-api-key:961
+cd5b4c6e184ac437a9760be771528a12dd8874e7:streamlit-docker/NetworkGenius_Agents.ipynb:generic-api-key:963
+cd5b4c6e184ac437a9760be771528a12dd8874e7:streamlit-docker/NetworkGenius_Agents.ipynb:generic-api-key:1071
+cd5b4c6e184ac437a9760be771528a12dd8874e7:streamlit-docker/NetworkGenius_Agents.ipynb:generic-api-key:1086
+cd5b4c6e184ac437a9760be771528a12dd8874e7:streamlit-docker/NetworkGenius_Agents.ipynb:generic-api-key:1102

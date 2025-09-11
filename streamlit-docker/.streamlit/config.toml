@@ -1,0 +1,27 @@
+[server]
+# Hide Streamlit branding and signatures
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+# Don't show the "Made with Streamlit" footer
+showErrorDetails = false
+gatherUsageStats = false
+
+[theme]
+# Custom theme to make it look less like default Streamlit
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+
+[client]
+# Hide Streamlit toolbar and other UI elements
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[ui]
+# Ensure sidebar is always expanded and visible
+hideTopBar = true
+hideSidebarNav = false

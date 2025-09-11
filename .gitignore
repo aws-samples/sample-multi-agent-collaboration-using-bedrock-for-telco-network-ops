@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+env/
+myenv/
+.env
+
+# Lambda Layer dependencies
+lambda_layer/python/
+
+# AWS SAM
+.aws-sam/
+samconfig.toml
+packaged.yaml
+source.zip
+*.zip
+*.tar.gz
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+source.zip
+*.zip
+*.tar.gz
+*.log
+
+# Custom Old files
+*.old
+
+# Temporary documentation files (prevent clutter)
+*_TEMP.md
+*_DEBUG.md
+TROUBLESHOOTING_*.md
+TEMP_*.md
+CREDENTIAL_LOGGING.md
+BROWSER_CACHE_FIX.md
+SECURITY_HARDENING.md
+DEPLOYMENT_SUMMARY.md
