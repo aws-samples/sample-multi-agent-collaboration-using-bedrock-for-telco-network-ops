@@ -240,8 +240,14 @@ To use your own network data:
 
 When you're done with the solution, clean up all resources:
 
+**For Linux/macOS:**
 ```bash
 ./cleanup.sh [stack-name] [region] [profile]
+```
+
+**For Windows PowerShell:**
+```powershell
+.\cleanup.ps1 -StackName [stack-name] -Region [region] -Profile [profile]
 ```
 
 This script:
