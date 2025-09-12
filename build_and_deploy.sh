@@ -8,6 +8,10 @@ PROFILE=${3:-default}
 
 echo "Deploying $STACK_NAME to $REGION using profile $PROFILE"
 
+# Create service-linked role for Lambda@Edge (if it doesn't exist)
+echo "Creating service-linked role for Lambda@Edge (if needed)..."
+aws iam create-service-linked-role --aws-service-name lambda.amazonaws.com --profile $PROFILE 2>/dev/null || echo "Service-linked role already exists or creation failed (this is usually fine)"
+
 # Create lambda layer directory
 echo "Creating lambda layer..."
 mkdir -p lambda_layer/python

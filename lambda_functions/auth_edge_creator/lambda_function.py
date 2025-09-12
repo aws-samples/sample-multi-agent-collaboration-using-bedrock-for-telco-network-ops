@@ -14,7 +14,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # Initialize AWS clients
-lambda_client = boto3.client('lambda')
+lambda_client = boto3.client('lambda', region_name='us-east-1')  # Lambda@Edge must be in us-east-1
 cognito_client = boto3.client('cognito-idp')
 cloudfront_client = boto3.client('cloudfront')
 
@@ -140,7 +140,7 @@ def lambda_handler(event, context):
                 return
             
             # Step 5: Associate with CloudFront
-            lambda_version_arn = f"arn:aws:lambda:{region}:{account_id}:function:{function_name}:{version}"
+            lambda_version_arn = f"arn:aws:lambda:us-east-1:{account_id}:function:{function_name}:{version}"
             try:
                 logger.info(f"Associating Lambda with CloudFront: {cloudfront_distribution_id}")
                 

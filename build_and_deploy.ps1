@@ -10,6 +10,15 @@ $ErrorActionPreference = "Continue"
 
 Write-Host "Deploying $StackName to $Region using profile $Profile" -ForegroundColor Green
 
+# Create service-linked role for Lambda@Edge (if it doesn't exist)
+Write-Host "Creating service-linked role for Lambda@Edge (if needed)..." -ForegroundColor Yellow
+try {
+    aws iam create-service-linked-role --aws-service-name lambda.amazonaws.com --profile $Profile 2>$null
+    Write-Host "Service-linked role created successfully" -ForegroundColor Green
+} catch {
+    Write-Host "Service-linked role already exists or creation failed (this is usually fine)" -ForegroundColor Yellow
+}
+
 # Validate AWS configuration
 Write-Host "Validating AWS configuration..." -ForegroundColor Yellow
 try {
