@@ -831,6 +831,13 @@ Resources:
               Action:
                 - iam:PassRole
               Resource: !GetAtt CloudFrontAuthFunctionRole.Arn
+            - Effect: Allow
+              Action:
+                - iam:CreateServiceLinkedRole
+              Resource: "arn:aws:iam::*:role/aws-service-role/lambda.amazonaws.com/AWSServiceRoleForLambdaReplicator"
+              Condition:
+                StringEquals:
+                  "iam:AWSServiceName": "lambda.amazonaws.com"
 
   # Custom resource to create and configure the Lambda@Edge function
   AuthEdgeResource:
