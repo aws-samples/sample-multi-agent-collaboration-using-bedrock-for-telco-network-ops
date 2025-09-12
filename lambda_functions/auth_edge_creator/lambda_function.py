@@ -305,6 +305,10 @@ def create_or_update_lambda_function(function_name, cognito_domain, client_id, c
         role_arn = os.environ.get('LAMBDA_ROLE_ARN')
         if not role_arn:
             raise ValueError("LAMBDA_ROLE_ARN environment variable is not set")
+        
+        # Add a delay to ensure the role is fully propagated
+        logger.info("Waiting for IAM role to be fully propagated...")
+        time.sleep(10)
             
         response = lambda_client.create_function(
             FunctionName=function_name,
