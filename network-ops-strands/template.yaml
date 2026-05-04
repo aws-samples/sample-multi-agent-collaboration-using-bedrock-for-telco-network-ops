@@ -1,0 +1,395 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Network Operations Platform - Complete Infrastructure'
+
+##############################################################################
+# This is the MASTER SAM template that orchestrates all nested stacks.
+# 
+# Deploy with one command:
+#   sam deploy --guided
+#
+# Delete with one command:
+#   sam delete --stack-name netops
+##############################################################################
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Project Configuration"
+        Parameters:
+          - ProjectName
+          - Environment
+      - Label:
+          default: "Authentication Configuration"
+        Parameters:
+          - EnableJWTAuthorizer
+          - AdminEmail
+      - Label:
+          default: "Custom Domain (Optional)"
+        Parameters:
+          - CustomDomainName
+          - ACMCertificateArn
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: netops
+    Description: Project name for resource naming (no hyphens)
+    AllowedPattern: ^[a-z0-9]+$
+    ConstraintDescription: Must contain only lowercase letters and numbers
+  
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  EnableJWTAuthorizer:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Enable Lambda@Edge JWT authorization (recommended)
+  
+  AdminEmail:
+    Type: String
+    Default: ''
+    Description: Admin email for initial Cognito user (optional)
+    AllowedPattern: ^$|^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+  
+  CustomDomainName:
+    Type: String
+    Default: ''
+    Description: Custom domain name (e.g., netops.example.com)
+  
+  ACMCertificateArn:
+    Type: String
+    Default: ''
+    Description: ACM certificate ARN for custom domain (must be in us-east-1)
+  
+  MemoryId:
+    Type: String
+    Default: ''
+    Description: AgentCore Memory ID for chat history (set after memory deployment)
+
+Conditions:
+  EnableJWT: !Equals [!Ref EnableJWTAuthorizer, 'true']
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, '']]
+
+Resources:
+  ##############################################################################
+  # 1. S3 Buckets (Frontend, Data, Config)
+  ##############################################################################
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: infrastructure/cloudformation/s3-buckets.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##############################################################################
+  # 2. Cognito (User Pool, Identity Pool, App Client)
+  ##############################################################################
+  CognitoStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: infrastructure/cloudformation/cognito.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        AdminEmail: !Ref AdminEmail
+        CloudFrontDomainName: 'placeholder.cloudfront.net'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##############################################################################
+  # 3. IAM Roles (AgentCore, Lambda@Edge, Deployment)
+  ##############################################################################
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: infrastructure/cloudformation/iam-roles.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        DataBucketArn: !GetAtt S3Stack.Outputs.DataBucketArn
+        ConfigBucketArn: !GetAtt S3Stack.Outputs.ConfigBucketArn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##############################################################################
+  # 4. Lambda@Edge (JWT Authorizer) - Optional
+  ##############################################################################
+  LambdaEdgeStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: EnableJWT
+    Properties:
+      TemplateURL: infrastructure/cloudformation/lambda-edge.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        CognitoUserPoolId: !GetAtt CognitoStack.Outputs.UserPoolId
+        CognitoAppClientId: !GetAtt CognitoStack.Outputs.UserPoolClientId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##############################################################################
+  # 5. CloudFront (CDN with optional Lambda@Edge)
+  ##############################################################################
+  CloudFrontStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: infrastructure/cloudformation/cloudfront.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        FrontendBucketName: !GetAtt S3Stack.Outputs.FrontendBucketName
+        CloudFrontOAIId: !GetAtt S3Stack.Outputs.CloudFrontOAIId
+        CustomDomainName: !Ref CustomDomainName
+        ACMCertificateArn: !Ref ACMCertificateArn
+        JWTAuthorizerVersionArn: !If
+          - EnableJWT
+          - !GetAtt LambdaEdgeStack.Outputs.JWTAuthorizerVersionArn
+          - ''
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  ##############################################################################
+  # 6. API Lambda (Metrics, Topology, Chat History, Config)
+  ##############################################################################
+  ApiLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-api-lambda'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['s3:GetObject', 's3:ListBucket']
+                Resource:
+                  - !GetAtt S3Stack.Outputs.DataBucketArn
+                  - !Sub '${S3Stack.Outputs.DataBucketArn}/*'
+                  - !GetAtt S3Stack.Outputs.ConfigBucketArn
+                  - !Sub '${S3Stack.Outputs.ConfigBucketArn}/*'
+        - PolicyName: AgentCoreMemoryRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock-agentcore:ListEvents'
+                  - 'bedrock-agentcore:ListSessions'
+                  - 'bedrock-agentcore:GetMemory'
+                Resource: '*'
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-api'
+      Handler: handler.lambda_handler
+      Runtime: python3.14
+      CodeUri: infrastructure/lambda-api/
+      MemorySize: 256
+      Timeout: 30
+      Role: !GetAtt ApiLambdaRole.Arn
+      Environment:
+        Variables:
+          DATA_BUCKET: !GetAtt S3Stack.Outputs.DataBucketName
+          CONFIG_BUCKET: !GetAtt S3Stack.Outputs.ConfigBucketName
+          MEMORY_ID: !Ref MemoryId
+      Events:
+        Metrics:
+          Type: Api
+          Properties:
+            Path: /api/metrics
+            Method: get
+            RestApiId: !Ref ApiGateway
+        Topology:
+          Type: Api
+          Properties:
+            Path: /api/topology
+            Method: get
+            RestApiId: !Ref ApiGateway
+        ChatSessions:
+          Type: Api
+          Properties:
+            Path: /api/chat/sessions
+            Method: get
+            RestApiId: !Ref ApiGateway
+        ChatSessionsDelete:
+          Type: Api
+          Properties:
+            Path: /api/chat/sessions
+            Method: delete
+            RestApiId: !Ref ApiGateway
+        ChatHistory:
+          Type: Api
+          Properties:
+            Path: /api/chat/history
+            Method: get
+            RestApiId: !Ref ApiGateway
+        Config:
+          Type: Api
+          Properties:
+            Path: /api/config
+            Method: get
+            RestApiId: !Ref ApiGateway
+        CorsProxy:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: options
+            RestApiId: !Ref ApiGateway
+
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-api'
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+
+##############################################################################
+# Outputs
+##############################################################################
+Outputs:
+  # S3 Buckets
+  FrontendBucketName:
+    Description: Frontend S3 bucket name
+    Value: !GetAtt S3Stack.Outputs.FrontendBucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendBucket'
+  
+  DataBucketName:
+    Description: Data S3 bucket name
+    Value: !GetAtt S3Stack.Outputs.DataBucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-DataBucket'
+  
+  ConfigBucketName:
+    Description: Config S3 bucket name
+    Value: !GetAtt S3Stack.Outputs.ConfigBucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-ConfigBucket'
+  
+  # Cognito
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !GetAtt CognitoStack.Outputs.UserPoolId
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolId'
+  
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !GetAtt CognitoStack.Outputs.UserPoolClientId
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolClientId'
+  
+  IdentityPoolId:
+    Description: Cognito Identity Pool ID
+    Value: !GetAtt CognitoStack.Outputs.IdentityPoolId
+    Export:
+      Name: !Sub '${AWS::StackName}-IdentityPoolId'
+  
+  UserPoolDomain:
+    Description: Cognito User Pool Domain
+    Value: !GetAtt CognitoStack.Outputs.UserPoolDomain
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolDomain'
+  
+  # IAM Roles
+  AgentCoreExecutionRoleArn:
+    Description: AgentCore execution role ARN
+    Value: !GetAtt IAMStack.Outputs.AgentCoreExecutionRoleArn
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentCoreRoleArn'
+  
+  # Lambda@Edge
+  JWTAuthorizerVersionArn:
+    Condition: EnableJWT
+    Description: Lambda@Edge JWT authorizer version ARN
+    Value: !GetAtt LambdaEdgeStack.Outputs.JWTAuthorizerVersionArn
+    Export:
+      Name: !Sub '${AWS::StackName}-JWTAuthorizerArn'
+  
+  # CloudFront
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID
+    Value: !GetAtt CloudFrontStack.Outputs.CloudFrontDistributionId
+    Export:
+      Name: !Sub '${AWS::StackName}-DistributionId'
+  
+  CloudFrontURL:
+    Description: CloudFront distribution URL
+    Value: !GetAtt CloudFrontStack.Outputs.CloudFrontURL
+    Export:
+      Name: !Sub '${AWS::StackName}-URL'
+  
+  CustomDomainURL:
+    Condition: HasCustomDomain
+    Description: Custom domain URL
+    Value: !GetAtt CloudFrontStack.Outputs.CustomDomainURL
+    Export:
+      Name: !Sub '${AWS::StackName}-CustomURL'
+  
+  # API Gateway
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+  
+  # Summary
+  ApplicationURL:
+    Description: Application URL (use this to access the platform)
+    Value: !If
+      - HasCustomDomain
+      - !GetAtt CloudFrontStack.Outputs.CustomDomainURL
+      - !GetAtt CloudFrontStack.Outputs.CloudFrontURL
+  
+  NextSteps:
+    Description: Next steps after infrastructure deployment
+    Value: !Sub |
+      Infrastructure deployed successfully!
+      
+      Next steps:
+      1. Upload data: ./scripts/upload_data.sh --bucket ${S3Stack.Outputs.DataBucketName}
+      2. Deploy agents: ./scripts/deploy_agentcore.sh --role ${IAMStack.Outputs.AgentCoreExecutionRoleArn}
+      3. Deploy frontend: ./scripts/deploy_frontend.sh --bucket ${S3Stack.Outputs.FrontendBucketName} --distribution ${CloudFrontStack.Outputs.CloudFrontDistributionId}
+      4. Access application: ${CloudFrontStack.Outputs.CloudFrontURL}

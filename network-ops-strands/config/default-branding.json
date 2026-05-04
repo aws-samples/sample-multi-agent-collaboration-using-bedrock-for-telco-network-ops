@@ -1,0 +1,14 @@
+{
+  "companyName": "Network Operations",
+  "logoUrl": "",
+  "primaryColor": "#3B82F6",
+  "secondaryColor": "#8B5CF6",
+  "accentColor": "#10B981",
+  "faviconUrl": "/favicon.ico",
+  "description": "AI-powered network operations monitoring and management platform.",
+  "features": {
+    "darkMode": true,
+    "dashboard": true,
+    "traceViewer": false
+  }
+}

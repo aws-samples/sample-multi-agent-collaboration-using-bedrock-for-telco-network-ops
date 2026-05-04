@@ -1,0 +1,48 @@
+# Environment files (contain secrets/ARNs)
+.env
+.env.local
+.env.production
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# AgentCore config (contains account-specific ARNs)
+.bedrock_agentcore.yaml
+.bedrock_agentcore/
+backend/.bedrock_agentcore.yaml
+backend/.bedrock_agentcore/
+mcp-server/.bedrock_agentcore.yaml
+mcp-server/.bedrock_agentcore/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+backend/venv/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# AWS SAM
+.aws-sam/
+samconfig.toml
+
+# Generated data (regenerated on deploy)
+data/
+
+# OS
+.DS_Store
+*.swp
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Temp files
+_test_*.py

@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Bedrock Knowledge Base with S3 Vectors for Network Operations Platform'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+  ProjectName:
+    Type: String
+    Default: netops
+  DataBucketName:
+    Type: String
+    Description: S3 bucket containing knowledge base source documents
+  DataBucketArn:
+    Type: String
+    Description: ARN of the data S3 bucket
+
+Resources:
+  # IAM role for Bedrock Knowledge Base service
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-kb-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+      Policies:
+        # Read source documents from S3
+        - PolicyName: S3DataSourceAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Ref DataBucketArn
+                  - !Sub '${DataBucketArn}/*'
+        # Invoke embedding model
+        - PolicyName: BedrockModelAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeModel'
+                Resource:
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/*'
+        # S3 Vectors access (auto-created bucket)
+        - PolicyName: S3VectorsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3vectors:CreateIndex'
+                  - 's3vectors:PutVectors'
+                  - 's3vectors:GetVectors'
+                  - 's3vectors:DeleteVectors'
+                  - 's3vectors:QueryVectors'
+                  - 's3vectors:GetIndex'
+                  - 's3vectors:ListIndexes'
+                Resource:
+                  - !Sub 'arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:*'
+              - Effect: Allow
+                Action:
+                  - 's3vectors:CreateBucket'
+                  - 's3vectors:ListBuckets'
+                  - 's3vectors:GetBucket'
+                Resource: '*'
+
+  # Bedrock Knowledge Base with S3 Vectors storage
+  KnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: KnowledgeBaseRole
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-kb'
+      Description: 'Network operations troubleshooting articles and incident tickets'
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              Dimensions: 1024
+      StorageConfiguration:
+        Type: S3_VECTORS
+        S3VectorsConfiguration: {}
+      Tags:
+        Environment: !Ref Environment
+        Project: !Ref ProjectName
+
+  # S3 Data Source for the Knowledge Base
+  KnowledgeBaseDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref KnowledgeBase
+      Name: !Sub '${ProjectName}-${Environment}-kb-s3-source'
+      Description: 'S3 source with troubleshooting articles and incident tickets'
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !Ref DataBucketArn
+          InclusionPrefixes:
+            - 'knowledge-base/'
+
+Outputs:
+  KnowledgeBaseId:
+    Description: Bedrock Knowledge Base ID
+    Value: !Ref KnowledgeBase
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseId'
+
+  KnowledgeBaseArn:
+    Description: Bedrock Knowledge Base ARN
+    Value: !GetAtt KnowledgeBase.KnowledgeBaseArn
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseArn'
+
+  DataSourceId:
+    Description: Knowledge Base Data Source ID
+    Value: !Ref KnowledgeBaseDataSource
+    Export:
+      Name: !Sub '${AWS::StackName}-DataSourceId'
+
+  KnowledgeBaseRoleArn:
+    Description: Knowledge Base IAM role ARN
+    Value: !GetAtt KnowledgeBaseRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseRoleArn'

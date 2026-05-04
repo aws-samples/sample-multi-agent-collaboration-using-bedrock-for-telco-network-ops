@@ -1,0 +1,113 @@
+# AgentCore Configuration for Network Operations Platform
+# This file defines the agent deployment configuration for AWS AgentCore
+
+agents:
+  supervisor:
+    name: netops-supervisor
+    description: Supervisor agent that routes queries to specialized agents
+    runtime: python3.9
+    handler: strands_agents.supervisor_agent:create_supervisor_agent
+    model:
+      provider: bedrock
+      model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      temperature: 0.5
+      max_tokens: 4096
+    memory:
+      enabled: true
+      memory_id: netops-sessions
+      ttl_hours: 24
+    observability:
+      logging: true
+      tracing: true
+      metrics: true
+    environment:
+      ENVIRONMENT: production
+      AWS_REGION: ${AWS_REGION}
+    iam_role: ${AGENTCORE_ROLE_ARN}
+  
+  maintenance:
+    name: netops-maintenance
+    description: Maintenance schedule agent
+    runtime: python3.9
+    handler: strands_agents.maintenance_agent:create_maintenance_agent
+    model:
+      provider: bedrock
+      model_id: us.amazon.nova-lite-v1:0
+      temperature: 0.3
+      max_tokens: 2048
+    observability:
+      logging: true
+      tracing: true
+      metrics: true
+    environment:
+      ENVIRONMENT: production
+      AWS_REGION: ${AWS_REGION}
+      DATA_BUCKET_NAME: ${DATA_BUCKET_NAME}
+    iam_role: ${AGENTCORE_ROLE_ARN}
+  
+  alarm:
+    name: netops-alarm
+    description: Alarm monitoring agent
+    runtime: python3.9
+    handler: strands_agents.alarm_agent:create_alarm_agent
+    model:
+      provider: bedrock
+      model_id: us.amazon.nova-lite-v1:0
+      temperature: 0.2
+      max_tokens: 2048
+    observability:
+      logging: true
+      tracing: true
+      metrics: true
+    environment:
+      ENVIRONMENT: production
+      AWS_REGION: ${AWS_REGION}
+      DATA_BUCKET_NAME: ${DATA_BUCKET_NAME}
+    iam_role: ${AGENTCORE_ROLE_ARN}
+  
+  kpi:
+    name: netops-kpi
+    description: KPI analysis agent
+    runtime: python3.9
+    handler: strands_agents.kpi_agent:create_kpi_agent
+    model:
+      provider: bedrock
+      model_id: us.amazon.nova-lite-v1:0
+      temperature: 0.4
+      max_tokens: 3072
+    observability:
+      logging: true
+      tracing: true
+      metrics: true
+    environment:
+      ENVIRONMENT: production
+      AWS_REGION: ${AWS_REGION}
+      DATA_BUCKET_NAME: ${DATA_BUCKET_NAME}
+    iam_role: ${AGENTCORE_ROLE_ARN}
+
+memory:
+  sessions:
+    memory_id: netops-sessions
+    ttl_hours: 24
+    max_size_mb: 100
+
+observability:
+  cloudwatch:
+    log_group: /aws/agentcore/netops
+    retention_days: 30
+  xray:
+    enabled: true
+  metrics:
+    namespace: NetworkOperations/AgentCore
+    dimensions:
+      - Environment
+      - AgentName
+
+deployment:
+  region: ${AWS_REGION}
+  vpc_config:
+    enabled: false  # Set to true if deploying in VPC
+  tags:
+    Application: NetworkOperationsPlatform
+    Environment: ${ENVIRONMENT}
+    ManagedBy: AgentCore

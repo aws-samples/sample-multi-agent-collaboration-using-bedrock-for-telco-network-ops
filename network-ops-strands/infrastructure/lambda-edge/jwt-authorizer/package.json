@@ -1,0 +1,21 @@
+{
+  "name": "jwt-authorizer-edge",
+  "version": "1.0.0",
+  "description": "Lambda@Edge JWT authorizer for CloudFront",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "lambda-edge",
+    "jwt",
+    "cognito",
+    "cloudfront"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.1.0"
+  }
+}

@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lambda@Edge functions for JWT authorization'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: netops
+    Description: Project name for resource naming
+  
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  CognitoUserPoolId:
+    Type: String
+    Description: Cognito User Pool ID for JWT validation
+  
+  CognitoAppClientId:
+    Type: String
+    Description: Cognito App Client ID for JWT validation
+
+Resources:
+  # IAM Role for Lambda@Edge
+  JWTAuthorizerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-jwt-authorizer-edge-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda@Edge Function for JWT Authorization
+  JWTAuthorizerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-jwt-authorizer'
+      Description: JWT authorization at CloudFront edge
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Role: !GetAtt JWTAuthorizerRole.Arn
+      Timeout: 5
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          // Placeholder - will be replaced by deployment script
+          exports.handler = async (event) => {
+            return event.Records[0].cf.request;
+          };
+      Environment:
+        Variables:
+          AWS_REGION: !Ref AWS::Region
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+          COGNITO_APP_CLIENT_ID: !Ref CognitoAppClientId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda Version for Lambda@Edge (required)
+  JWTAuthorizerVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref JWTAuthorizerFunction
+      Description: !Sub 'Version for ${Environment} environment'
+
+Outputs:
+  JWTAuthorizerFunctionArn:
+    Description: ARN of the JWT authorizer Lambda function
+    Value: !GetAtt JWTAuthorizerFunction.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-jwt-authorizer-arn'
+  
+  JWTAuthorizerVersionArn:
+    Description: ARN of the JWT authorizer Lambda version (for CloudFront association)
+    Value: !Ref JWTAuthorizerVersion
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-jwt-authorizer-version-arn'
+  
+  JWTAuthorizerRoleArn:
+    Description: ARN of the JWT authorizer IAM role
+    Value: !GetAtt JWTAuthorizerRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-jwt-authorizer-role-arn'

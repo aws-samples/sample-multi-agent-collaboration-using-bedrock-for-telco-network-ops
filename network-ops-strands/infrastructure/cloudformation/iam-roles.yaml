@@ -1,0 +1,457 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM roles for Network Operations Platform - AgentCore and Lambda functions'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: netops
+    Description: Project name for resource naming
+  
+  DataBucketArn:
+    Type: String
+    Description: Data S3 bucket ARN (from s3-buckets stack)
+  
+  ConfigBucketArn:
+    Type: String
+    Description: Config S3 bucket ARN (from s3-buckets stack)
+
+Resources:
+  # IAM role for AgentCore agents
+  AgentCoreExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-agentcore-execution'
+      Description: Execution role for AgentCore agents
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AssumeRolePolicy
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+              ArnLike:
+                'aws:SourceArn': !Sub 'arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        # ECR image access
+        - PolicyName: ECRImageAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ECRImageAccess
+                Effect: Allow
+                Action:
+                  - 'ecr:BatchGetImage'
+                  - 'ecr:GetDownloadUrlForLayer'
+                Resource:
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*'
+              - Sid: ECRTokenAccess
+                Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                Resource: '*'
+        
+        # CloudWatch Logs
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:CreateLogGroup'
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*'
+              - Effect: Allow
+                Action:
+                  - 'logs:DescribeLogGroups'
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*'
+        
+        # X-Ray tracing
+        - PolicyName: XRayTracing
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'xray:PutTraceSegments'
+                  - 'xray:PutTelemetryRecords'
+                  - 'xray:GetSamplingRules'
+                  - 'xray:GetSamplingTargets'
+                Resource: '*'
+        
+        # CloudWatch metrics
+        - PolicyName: CloudWatchMetrics
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cloudwatch:PutMetricData'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'cloudwatch:namespace': 'bedrock-agentcore'
+        
+        # Bedrock model invocation
+        - PolicyName: BedrockModelInvocation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: BedrockModelInvocation
+                Effect: Allow
+                Action:
+                  - 'bedrock:InvokeModel'
+                  - 'bedrock:InvokeModelWithResponseStream'
+                Resource:
+                  - 'arn:aws:bedrock:*::foundation-model/*'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:*'
+        
+        # AgentCore Code Interpreter
+        - PolicyName: AgentCoreCodeInterpreter
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock-agentcore:CreateCodeInterpreter'
+                  - 'bedrock-agentcore:StartCodeInterpreterSession'
+                  - 'bedrock-agentcore:InvokeCodeInterpreter'
+                  - 'bedrock-agentcore:StopCodeInterpreterSession'
+                  - 'bedrock-agentcore:DeleteCodeInterpreter'
+                  - 'bedrock-agentcore:ListCodeInterpreters'
+                  - 'bedrock-agentcore:GetCodeInterpreter'
+                  - 'bedrock-agentcore:GetCodeInterpreterSession'
+                  - 'bedrock-agentcore:ListCodeInterpreterSessions'
+                Resource:
+                  - !Sub 'arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:code-interpreter/*'
+                  - !Sub 'arn:aws:bedrock-agentcore:${AWS::Region}:aws:code-interpreter/*'
+        
+        # AgentCore Runtime invocation (for calling MCP servers and other agents)
+        - PolicyName: AgentCoreRuntimeInvocation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock-agentcore:InvokeAgentRuntime'
+                Resource:
+                  - !Sub 'arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/*'
+        
+        # AgentCore Memory access (STM + LTM)
+        - PolicyName: AgentCoreMemoryAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock-agentcore:CreateEvent'
+                  - 'bedrock-agentcore:ListEvents'
+                  - 'bedrock-agentcore:GetEvent'
+                  - 'bedrock-agentcore:DeleteEvent'
+                  - 'bedrock-agentcore:ListSessions'
+                  - 'bedrock-agentcore:ListActors'
+                  - 'bedrock-agentcore:SearchMemoryRecords'
+                  - 'bedrock-agentcore:ListMemoryRecords'
+                  - 'bedrock-agentcore:GetMemoryRecord'
+                  - 'bedrock-agentcore:DeleteMemoryRecord'
+                Resource:
+                  - !Sub 'arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:memory/*'
+        
+        # Bedrock Knowledge Base retrieve
+        - PolicyName: BedrockKnowledgeBaseAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:Retrieve'
+                  - 'bedrock:RetrieveAndGenerate'
+                Resource:
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*'
+
+  # IAM role for Bedrock Knowledge Base service
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-kb-role'
+      Description: Service role for Bedrock Knowledge Base
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: S3DataSourceAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Ref DataBucketArn
+                  - !Sub '${DataBucketArn}/*'
+        - PolicyName: BedrockModelAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeModel'
+                Resource:
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/*'
+        - PolicyName: S3VectorsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3vectors:CreateBucket'
+                  - 's3vectors:CreateIndex'
+                  - 's3vectors:PutVectors'
+                  - 's3vectors:GetVectors'
+                  - 's3vectors:DeleteVectors'
+                  - 's3vectors:QueryVectors'
+                  - 's3vectors:GetIndex'
+                  - 's3vectors:ListIndexes'
+                  - 's3vectors:ListBuckets'
+                  - 's3vectors:GetBucket'
+                Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        
+        # S3 data access
+        - PolicyName: S3DataAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Ref DataBucketArn
+                  - !Sub '${DataBucketArn}/*'
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                Resource:
+                  - !Ref ConfigBucketArn
+                  - !Sub '${ConfigBucketArn}/*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # IAM role for Lambda functions (if needed)
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-lambda-execution'
+      Description: Execution role for Lambda functions
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        # S3 access
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Ref DataBucketArn
+                  - !Sub '${DataBucketArn}/*'
+        
+        # Cognito access
+        - PolicyName: CognitoAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cognito-idp:AdminGetUser'
+                  - 'cognito-idp:AdminListGroupsForUser'
+                Resource:
+                  - !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # IAM role for Lambda@Edge (authentication)
+  LambdaEdgeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-lambda-edge-execution'
+      Description: Execution role for Lambda@Edge authentication
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        # Cognito access for token validation
+        - PolicyName: CognitoTokenValidation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cognito-idp:GetUser'
+                  - 'cognito-idp:AdminGetUser'
+                Resource:
+                  - !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # IAM role for CI/CD deployment
+  DeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-deployment'
+      Description: Role for CI/CD deployment automation
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        # IAM permissions for role management
+        - PolicyName: IAMRoleManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'iam:CreateRole'
+                  - 'iam:DeleteRole'
+                  - 'iam:GetRole'
+                  - 'iam:PassRole'
+                  - 'iam:AttachRolePolicy'
+                  - 'iam:DetachRolePolicy'
+                  - 'iam:PutRolePolicy'
+                  - 'iam:DeleteRolePolicy'
+                  - 'iam:TagRole'
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  AgentCoreExecutionRoleArn:
+    Description: AgentCore execution role ARN
+    Value: !GetAtt AgentCoreExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentCoreExecutionRoleArn'
+
+  AgentCoreExecutionRoleName:
+    Description: AgentCore execution role name
+    Value: !Ref AgentCoreExecutionRole
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentCoreExecutionRoleName'
+
+  LambdaExecutionRoleArn:
+    Description: Lambda execution role ARN
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaExecutionRoleArn'
+
+  LambdaExecutionRoleName:
+    Description: Lambda execution role name
+    Value: !Ref LambdaExecutionRole
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaExecutionRoleName'
+
+  LambdaEdgeExecutionRoleArn:
+    Description: Lambda@Edge execution role ARN
+    Value: !GetAtt LambdaEdgeExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaEdgeExecutionRoleArn'
+
+  LambdaEdgeExecutionRoleName:
+    Description: Lambda@Edge execution role name
+    Value: !Ref LambdaEdgeExecutionRole
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaEdgeExecutionRoleName'
+
+  DeploymentRoleArn:
+    Description: Deployment role ARN
+    Value: !GetAtt DeploymentRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DeploymentRoleArn'
+
+  DeploymentRoleName:
+    Description: Deployment role name
+    Value: !Ref DeploymentRole
+    Export:
+      Name: !Sub '${AWS::StackName}-DeploymentRoleName'
+
+  KnowledgeBaseRoleArn:
+    Description: Knowledge Base service role ARN
+    Value: !GetAtt KnowledgeBaseRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseRoleArn'

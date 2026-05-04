@@ -1,0 +1,76 @@
+version: 0.2
+
+env:
+  variables:
+    DEPLOY_REGION: "us-east-1"
+    PROJECT_NAME: "netops"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+      nodejs: 20
+    commands:
+      - echo "=== Installing dependencies ==="
+      # SAM CLI
+      - pip install aws-sam-cli
+      # AgentCore CLI + Strands
+      - pip install agentcore-cli bedrock-agentcore strands-agents boto3 pyyaml
+      # Verify
+      - sam --version
+      - agentcore --version || echo "agentcore CLI installed"
+      - node --version
+      - python --version
+
+  pre_build:
+    commands:
+      - echo "=== Pre-build setup ==="
+      - cd network-ops-strands
+      # Create backend venv for deploy scripts that source it
+      - python -m venv backend/venv
+      - source backend/venv/bin/activate
+      - pip install -r backend/requirements.txt 2>/dev/null || pip install boto3 strands-agents bedrock-agentcore pyyaml pandas
+      - deactivate
+      # Install frontend dependencies
+      - cd frontend && npm ci && cd ..
+
+  build:
+    commands:
+      - echo "=== Deploying Network Operations Platform ==="
+      - chmod +x deploy.sh scripts/*.sh
+      # Run the full deployment
+      # --create-demo-user creates a test user for validation
+      - ./deploy.sh --region $DEPLOY_REGION --stack-name $PROJECT_NAME --create-demo-user
+      - echo "=== Deployment complete ==="
+
+  post_build:
+    commands:
+      - echo "=== Post-build validation ==="
+      # Get the application URL
+      - |
+        APP_URL=$(aws cloudformation describe-stacks \
+          --stack-name $PROJECT_NAME --region $DEPLOY_REGION \
+          --query "Stacks[0].Outputs[?OutputKey=='ApplicationURL'].OutputValue" \
+          --output text 2>/dev/null || echo "URL not found")
+        echo "Application URL: $APP_URL"
+      # Basic health check
+      - |
+        API_URL=$(aws cloudformation describe-stacks \
+          --stack-name $PROJECT_NAME --region $DEPLOY_REGION \
+          --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayUrl'].OutputValue" \
+          --output text 2>/dev/null || echo "")
+        if [ -n "$API_URL" ]; then
+          echo "Testing API health..."
+          curl -s "${API_URL}/api/metrics" | head -100 || echo "API check skipped"
+        fi
+
+artifacts:
+  files:
+    - '**/*'
+  base-directory: network-ops-strands
+
+cache:
+  paths:
+    - 'network-ops-strands/frontend/node_modules/**/*'
+    - 'network-ops-strands/backend/venv/**/*'
+    - '/root/.npm/**/*'

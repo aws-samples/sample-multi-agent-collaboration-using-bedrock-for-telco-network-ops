@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Network Operations Strands Platform - Master Stack'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    Description: Environment name (production, staging, development)
+    AllowedValues:
+      - production
+      - staging
+      - development
+  
+  CompanyName:
+    Type: String
+    Default: QTS Data Centers
+    Description: Company name for whitelabel branding
+  
+  DomainName:
+    Type: String
+    Default: ''
+    Description: Custom domain name (optional, leave empty for CloudFront domain)
+  
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: ACM certificate ARN for custom domain (required if DomainName is set)
+
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref DomainName, '']]
+
+Resources:
+  # S3 Buckets Stack
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./s3-buckets.yaml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        CompanyName: !Ref CompanyName
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: NetworkOperationsPlatform
+
+  # IAM Roles Stack
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./iam-roles.yaml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        DataBucketName: !GetAtt S3Stack.Outputs.DataBucketName
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: NetworkOperationsPlatform
+
+  # Cognito Stack
+  CognitoStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./cognito.yaml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        CompanyName: !Ref CompanyName
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: NetworkOperationsPlatform
+
+  # CloudFront Stack
+  CloudFrontStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - S3Stack
+      - CognitoStack
+    Properties:
+      TemplateURL: ./cloudfront.yaml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        FrontendBucketName: !GetAtt S3Stack.Outputs.FrontendBucketName
+        FrontendBucketDomainName: !GetAtt S3Stack.Outputs.FrontendBucketDomainName
+        DomainName: !Ref DomainName
+        CertificateArn: !Ref CertificateArn
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Application
+          Value: NetworkOperationsPlatform
+
+Outputs:
+  FrontendBucketName:
+    Description: S3 bucket for frontend static files
+    Value: !GetAtt S3Stack.Outputs.FrontendBucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendBucket'
+
+  DataBucketName:
+    Description: S3 bucket for CSV data files
+    Value: !GetAtt S3Stack.Outputs.DataBucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-DataBucket'
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID
+    Value: !GetAtt CloudFrontStack.Outputs.DistributionId
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDistributionId'
+
+  CloudFrontDomainName:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt CloudFrontStack.Outputs.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDomain'
+
+  FrontendURL:
+    Description: Frontend application URL
+    Value: !If
+      - HasCustomDomain
+      - !Sub 'https://${DomainName}'
+      - !Sub 'https://${CloudFrontStack.Outputs.DomainName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendURL'
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !GetAtt CognitoStack.Outputs.UserPoolId
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolId'
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !GetAtt CognitoStack.Outputs.UserPoolClientId
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolClientId'
+
+  AgentCoreRoleArn:
+    Description: IAM role ARN for AgentCore agents
+    Value: !GetAtt IAMStack.Outputs.AgentCoreRoleArn
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentCoreRoleArn'

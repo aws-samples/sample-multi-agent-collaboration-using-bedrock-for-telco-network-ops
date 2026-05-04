@@ -1,0 +1,177 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Network Operations API — Lambda + API Gateway for metrics, topology, chat history'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: netops
+  Environment:
+    Type: String
+    Default: dev
+  DataBucketName:
+    Type: String
+    Description: S3 bucket containing CSV data and topology JSON
+  ConfigBucketName:
+    Type: String
+    Default: ''
+    Description: S3 bucket containing branding config (optional, defaults to DataBucket)
+  MemoryId:
+    Type: String
+    Default: ''
+    Description: AgentCore Memory ID for chat history (optional)
+  CognitoUserPoolArn:
+    Type: String
+    Default: ''
+    Description: Cognito User Pool ARN for API authorization (optional)
+
+Conditions:
+  HasCognitoAuth: !Not [!Equals [!Ref CognitoUserPoolArn, '']]
+  HasConfigBucket: !Not [!Equals [!Ref ConfigBucketName, '']]
+
+Resources:
+
+  # Lambda execution role
+  ApiLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-api-lambda'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${DataBucketName}'
+                  - !Sub 'arn:aws:s3:::${DataBucketName}/*'
+              - !If
+                - HasConfigBucket
+                - Effect: Allow
+                  Action:
+                    - 's3:GetObject'
+                  Resource:
+                    - !Sub 'arn:aws:s3:::${ConfigBucketName}/*'
+                - !Ref AWS::NoValue
+        - PolicyName: AgentCoreMemoryRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock-agentcore:ListEvents'
+                  - 'bedrock-agentcore:ListSessions'
+                  - 'bedrock-agentcore:GetMemory'
+                Resource: '*'
+
+  # Lambda function
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-api'
+      Handler: handler.lambda_handler
+      Runtime: python3.12
+      CodeUri: ../lambda-api/
+      MemorySize: 256
+      Timeout: 30
+      Role: !GetAtt ApiLambdaRole.Arn
+      Environment:
+        Variables:
+          DATA_BUCKET: !Ref DataBucketName
+          CONFIG_BUCKET: !If [HasConfigBucket, !Ref ConfigBucketName, !Ref DataBucketName]
+          MEMORY_ID: !Ref MemoryId
+          AWS_REGION_OVERRIDE: !Ref AWS::Region
+      Events:
+        Metrics:
+          Type: Api
+          Properties:
+            Path: /api/metrics
+            Method: get
+            RestApiId: !Ref ApiGateway
+        Topology:
+          Type: Api
+          Properties:
+            Path: /api/topology
+            Method: get
+            RestApiId: !Ref ApiGateway
+        ChatSessions:
+          Type: Api
+          Properties:
+            Path: /api/chat/sessions
+            Method: get
+            RestApiId: !Ref ApiGateway
+        ChatHistory:
+          Type: Api
+          Properties:
+            Path: /api/chat/history
+            Method: get
+            RestApiId: !Ref ApiGateway
+        Config:
+          Type: Api
+          Properties:
+            Path: /api/config
+            Method: get
+            RestApiId: !Ref ApiGateway
+        CorsMetrics:
+          Type: Api
+          Properties:
+            Path: /api/metrics
+            Method: options
+            RestApiId: !Ref ApiGateway
+        CorsTopology:
+          Type: Api
+          Properties:
+            Path: /api/topology
+            Method: options
+            RestApiId: !Ref ApiGateway
+        CorsChatSessions:
+          Type: Api
+          Properties:
+            Path: /api/chat/sessions
+            Method: options
+            RestApiId: !Ref ApiGateway
+        CorsChatHistory:
+          Type: Api
+          Properties:
+            Path: /api/chat/history
+            Method: options
+            RestApiId: !Ref ApiGateway
+        CorsConfig:
+          Type: Api
+          Properties:
+            Path: /api/config
+            Method: options
+            RestApiId: !Ref ApiGateway
+
+  # API Gateway
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-api'
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+  ApiFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt ApiFunction.Arn

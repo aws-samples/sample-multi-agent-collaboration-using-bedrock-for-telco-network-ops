@@ -1,0 +1,217 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFront distribution for Network Operations Platform frontend'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: netops
+    Description: Project name for resource naming
+  
+  FrontendBucketName:
+    Type: String
+    Description: Frontend S3 bucket name (from s3-buckets stack)
+  
+  CloudFrontOAIId:
+    Type: String
+    Description: CloudFront Origin Access Identity ID (from s3-buckets stack)
+  
+  CustomDomainName:
+    Type: String
+    Default: ''
+    Description: Optional custom domain name (e.g., netops.example.com)
+  
+  ACMCertificateArn:
+    Type: String
+    Default: ''
+    Description: Optional ACM certificate ARN for custom domain (must be in us-east-1)
+  
+  JWTAuthorizerVersionArn:
+    Type: String
+    Default: ''
+    Description: Optional Lambda@Edge JWT authorizer version ARN (from lambda-edge stack)
+
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, '']]
+  HasCertificate: !Not [!Equals [!Ref ACMCertificateArn, '']]
+  HasJWTAuthorizer: !Not [!Equals [!Ref JWTAuthorizerVersionArn, '']]
+  IsProduction: !Equals [!Ref Environment, 'prod']
+
+Resources:
+  # CloudFront distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${ProjectName}-${Environment} frontend distribution'
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100  # Use only North America and Europe
+        
+        # Origins
+        Origins:
+          - Id: S3Origin
+            DomainName: !Sub '${FrontendBucketName}.s3.${AWS::Region}.amazonaws.com'
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${CloudFrontOAIId}'
+        
+        # Default cache behavior
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+            Headers:
+              - Origin
+              - Access-Control-Request-Method
+              - Access-Control-Request-Headers
+          MinTTL: 0
+          DefaultTTL: 86400  # 1 day
+          MaxTTL: 31536000   # 1 year
+        
+        # Custom error responses for React Router
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 300
+        
+        # Custom domain configuration (if provided)
+        Aliases: !If
+          - HasCustomDomain
+          - [!Ref CustomDomainName]
+          - !Ref AWS::NoValue
+        
+        ViewerCertificate: !If
+          - HasCertificate
+          - AcmCertificateArn: !Ref ACMCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        
+        # Logging configuration
+        Logging:
+          Bucket: !Sub '${LoggingBucket}.s3.amazonaws.com'
+          Prefix: !Sub 'cloudfront/${ProjectName}-${Environment}/'
+          IncludeCookies: false
+      
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # S3 bucket for CloudFront logs
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    # DeletionPolicy: Retain for production to prevent accidental log loss
+    # For dev/test, we rely on the delete script to empty the bucket first
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub '${ProjectName}-${Environment}-cloudfront-logs-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          # For dev/test: delete logs immediately to facilitate stack deletion
+          # For production: increase to 90+ days for compliance
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays:
+              !If
+                - IsProduction
+                - 90
+                - 1  # Delete after 1 day in dev/staging
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # Logging bucket policy for CloudFront
+  LoggingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LoggingBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudFrontLogs
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: 's3:PutObject'
+            Resource: !Sub '${LoggingBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+
+Outputs:
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-DistributionId'
+
+  CloudFrontDistributionDomainName:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-DomainName'
+
+  CloudFrontURL:
+    Description: CloudFront distribution URL
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-URL'
+
+  CustomDomainURL:
+    Condition: HasCustomDomain
+    Description: Custom domain URL
+    Value: !Sub 'https://${CustomDomainName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-CustomURL'
+
+  LoggingBucketName:
+    Description: CloudFront logging bucket name
+    Value: !Ref LoggingBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-LoggingBucket'
