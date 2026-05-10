@@ -15,7 +15,8 @@ phases:
       # SAM CLI
       - pip install aws-sam-cli
       # AgentCore CLI + Strands
-      - pip install agentcore-cli bedrock-agentcore strands-agents boto3 pyyaml
+      - pip install bedrock-agentcore-starter-toolkit bedrock-agentcore strands-agents boto3 pyyaml
+      - npm install -g @aws/agentcore
       # Verify
       - sam --version
       - agentcore --version || echo "agentcore CLI installed"
