@@ -29,9 +29,7 @@ phases:
       - cd network-ops-strands
       # Create backend venv for deploy scripts that source it
       - python -m venv backend/venv
-      - source backend/venv/bin/activate
-      - pip install -r backend/requirements.txt 2>/dev/null || pip install boto3 strands-agents bedrock-agentcore pyyaml pandas
-      - deactivate
+      - bash -c "source backend/venv/bin/activate && pip install -r backend/requirements.txt 2>/dev/null || pip install boto3 strands-agents bedrock-agentcore pyyaml pandas"
       # Install frontend dependencies
       - cd frontend && npm ci && cd ..
 

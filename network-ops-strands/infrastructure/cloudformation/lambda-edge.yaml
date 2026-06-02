@@ -77,7 +77,7 @@ Resources:
           };
       Environment:
         Variables:
-          AWS_REGION: !Ref AWS::Region
+          CUSTOM_REGION: !Ref AWS::Region
           COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
           COGNITO_APP_CLIENT_ID: !Ref CognitoAppClientId
       Tags:
